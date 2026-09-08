@@ -16,7 +16,7 @@ PyGObject==3.38.0
 PySimpleSOAP==1.16.2
 python-apt==2.2.1
 python-dateutil==2.8.2
-python-debian==0.1.39
+python-debian==1.1.1
 python-debianbts==3.1.0
 reportbug==7.10.3+deb11u1
 reportlab==3.5.13
