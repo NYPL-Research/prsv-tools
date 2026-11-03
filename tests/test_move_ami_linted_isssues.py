@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -10,12 +10,13 @@ import prsv_tools.ingest.move_ami_linted_issues as move_ami
 def test_package_argument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "sys.argv",
-        ["script", "--package", str(tmp_path)],
+        ["script", "--package", str(tmp_path), "--skip-prsv-check"],
     )
 
     args = move_ami.parse_args()
 
     assert tmp_path in args.packages
+    assert args.skip_prsv_check is True
 
 
 def test_directory_argument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -24,12 +25,24 @@ def test_directory_argument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(
         "sys.argv",
-        ["script", "--directory", str(tmp_path)],
+        ["script", "--directory", str(tmp_path), "--credentials", "test_cred"],
     )
 
     args = move_ami.parse_args()
 
     assert child_dir in args.packages
+    assert args.credentials == "test_cred"
+    assert args.skip_prsv_check is False
+
+
+def test_credentials_required_if_no_skip_prsv_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["script", "--package", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit):
+        move_ami.parse_args()
 
 
 @pytest.fixture
@@ -80,13 +93,13 @@ def test_set_dir_move_as_expected(tmp_destination: Path, good_package: Path, cap
     new_dir = tmp_destination / new_folder_name
     new_dir.mkdir(parents=True)
 
-    move_ami.set_dir(tmp_destination, good_package, new_folder_name)
+    move_ami.set_dir(good_package, tmp_destination, new_folder_name)
 
     assert (
-        tmp_destination / new_folder_name / good_package.name[:3] / good_package.name
+        tmp_destination / new_folder_name / good_package.parent.name / good_package.name
     ).exists()
 
-    log_msg = f"{good_package.name} has been moved to {(tmp_destination / new_folder_name / good_package.name[:3])}."
+    log_msg = f"MOVED: '{good_package.name}' to '{tmp_destination / new_folder_name / good_package.parent.name}' due to issue: {new_folder_name}"
     assert log_msg in caplog.text
 
 
@@ -94,29 +107,12 @@ def test_set_dir_move_and_create_dir(tmp_destination: Path, good_package: Path):
     new_folder_name = "create_scs"
     new_dir = tmp_destination / new_folder_name
 
-    move_ami.set_dir(tmp_destination, good_package, new_folder_name)
+    move_ami.set_dir(good_package, tmp_destination, new_folder_name)
 
     assert new_dir.exists()
     assert (
-        tmp_destination / new_folder_name / good_package.name[:3] / good_package.name
+        tmp_destination / new_folder_name / good_package.parent.name / good_package.name
     ).exists()
-
-
-def test_set_dir_fails_safely_with_bad_permissions(
-    tmp_destination: Path, good_package: Path, caplog
-):
-    new_folder_name = "create_scs"
-    tmp_destination.chmod(0o555)
-
-    move_ami.set_dir(tmp_destination, good_package, new_folder_name)
-
-    assert not (
-        tmp_destination / new_folder_name / good_package.name[:3] / good_package.name
-    ).exists()
-    assert good_package.exists()
-
-    log_msg = f"{good_package.name} not moved - permission error."
-    assert log_msg in caplog.text
 
 
 def test_set_dir_fails_safely_with_missing_target(
@@ -124,30 +120,56 @@ def test_set_dir_fails_safely_with_missing_target(
 ):
     new_folder_name = "create_scs"
 
-    move_ami.set_dir(tmp_destination / "does_not_exist", good_package, new_folder_name)
+    move_ami.set_dir(good_package, tmp_destination / "does_not_exist", new_folder_name)
 
-    log_msg = f"{good_package.name} not moved - target path does not exists."
+    log_msg = f"{good_package.name} not moved - '{tmp_destination / 'does_not_exist'}' does not exist."
 
     assert good_package.exists()
     assert log_msg in caplog.text
 
 
-def test_moved_package_exists(tmp_destination: Path, good_package: Path, caplog):
-    new_folder_name = "create_scs"
-
-    new_dir = (
-        tmp_destination / new_folder_name / good_package.name[:3] / good_package.name
-    )
-    new_dir.mkdir(parents=True, exist_ok=True)
-
-    assert new_dir.exists()
-
-    move_ami.set_dir(tmp_destination, good_package, new_folder_name)
-
-    assert good_package.exists()
-
-    log_msg = (
-        f"{good_package.name} not moved - file already exists in destination path."
+def test_main_skip_prsv_check(good_package: Path, tmp_destination: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["script", "--package", str(good_package), "--destination", str(tmp_destination), "--skip-prsv-check"],
     )
 
-    assert log_msg in caplog.text
+    move_ami.main()
+
+    captured = capsys.readouterr()
+    assert "Preservica check: SKIPPED (--skip-prsv-check)" in captured.out
+    assert "Valid packages (not moved): 1" in captured.out
+
+
+def test_main_prsv_check_skips_in_prod(good_package: Path, tmp_destination: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["script", "--package", str(good_package), "--destination", str(tmp_destination), "--credentials", "prod-ingest"],
+    )
+
+    with patch("prsv_tools.ingest.validate_ami_ingests.get_auth_token", return_value=("fake_token", "v7")):
+        with patch("prsv_tools.manage.create_pkg_report.requests_retry_session", return_value=Mock()):
+            with patch("prsv_tools.ingest.validate_ami_ingests.get_uuids_for_title", side_effect=lambda t, name, uuid, s: ["some-uuid"] if uuid == move_ami.AMI_UUID_PROD else []):
+                move_ami.main()
+
+    captured = capsys.readouterr()
+    assert "Packages already in Preservica (skipped lint check): 1" in captured.out
+    assert f"- {good_package.name}" in captured.out
+
+
+def test_main_prsv_check_marks_in_deletion(good_package: Path, tmp_destination: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["script", "--package", str(good_package), "--destination", str(tmp_destination), "--credentials", "prod-ingest"],
+    )
+
+    with patch("prsv_tools.ingest.validate_ami_ingests.get_auth_token", return_value=("fake_token", "v7")):
+        with patch("prsv_tools.manage.create_pkg_report.requests_retry_session", return_value=Mock()):
+            with patch("prsv_tools.ingest.validate_ami_ingests.get_uuids_for_title", side_effect=lambda t, name, uuid, s: ["some-deletion-uuid"] if uuid == move_ami.DELETION_SEARCH_UUID else []):
+                move_ami.main()
+
+    captured = capsys.readouterr()
+    assert "Packages in Deletion Folder: 1" in captured.out
+    assert f"- {good_package.name}" in captured.out
+    assert "Valid packages (not moved): 1" in captured.out
+

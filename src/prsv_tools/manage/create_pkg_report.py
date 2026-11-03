@@ -7,6 +7,7 @@ import logging
 import sys
 import pandas as pd
 import re
+import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
 from urllib.parse import quote
@@ -247,32 +248,34 @@ def get_identifiers(accesstoken: str, version: str, entity_type: str, entity_ref
     
     return id_container if id_container else "Not Found"
 
-def get_security_tag(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces) -> str:
+def get_security_tag(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces, root=None) -> str:
     """Gets sectags for SOs or IOs."""
-    url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}"
-    root = _get_entity_xml(accesstoken, session, url)
+    if root is None:
+        url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}"
+        root = _get_entity_xml(accesstoken, session, url)
+        
     if root is not None:
         tag_element = root.find('.//xip:SecurityTag', namespaces)
         if tag_element is not None and tag_element.text:
             return tag_element.text.strip()
     return "Not Found"
 
-def get_metadata_fragments(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces) -> str:
+def get_metadata_fragments(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces, root=None) -> str:
     """Gets and parses all mfrags."""
-    entity_url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}"
-    entity_root = _get_entity_xml(accesstoken, session, entity_url)
-    if entity_root is None:
+    if root is None:
+        entity_url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}"
+        root = _get_entity_xml(accesstoken, session, entity_url)
+        
+    if root is None:
         return "Not Found"
     
-    fragment_elements = entity_root.findall('.//entity:AdditionalInformation/entity:Metadata/entity:Fragment', namespaces)
+    fragment_elements = root.findall('.//entity:AdditionalInformation/entity:Metadata/entity:Fragment', namespaces)
     
     if not fragment_elements:
         return ""
 
     all_fragments_data = []
     for fragment in fragment_elements:
-        schema_url = fragment.attrib.get('schema', 'no_schema')
-        schema_name = schema_url.split('/')[-1]
         mfrag_url = fragment.text
         
         if not mfrag_url:
@@ -292,10 +295,12 @@ def get_metadata_fragments(accesstoken: str, version: str, entity_type: str, ent
 
     return "^".join(all_fragments_data)
 
-def get_pkg_title(accesstoken: str, pkg_uuid: str, version: str, session: requests.Session) -> Optional[str]:
+def get_pkg_title(accesstoken: str, pkg_uuid: str, version: str, session: requests.Session, root=None) -> Optional[str]:
     """Gets SO title."""
-    url = f"https://nypl.preservica.com/api/entity/structural-objects/{pkg_uuid}"
-    root = _get_entity_xml(accesstoken, session, url)
+    if root is None:
+        url = f"https://nypl.preservica.com/api/entity/structural-objects/{pkg_uuid}"
+        root = _get_entity_xml(accesstoken, session, url)
+        
     if root is not None:
         title_element = root.find(f".//{{http://preservica.com/XIP/v{version}}}Title")
         if title_element is not None and title_element.text:
@@ -344,10 +349,12 @@ def get_so_children(accesstoken: str, version: str, parent_uuid: str, session: r
 
     return children_data
 
-def get_co_details(accesstoken: str, version: str, co_ref: str, session: requests.Session, namespaces) -> dict:
+def get_co_details(accesstoken: str, version: str, co_ref: str, session: requests.Session, namespaces, root=None) -> dict:
     """Gets CO details, ie. title & parent IO."""
-    url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}"
-    root = _get_entity_xml(accesstoken, session, url)
+    if root is None:
+        url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}"
+        root = _get_entity_xml(accesstoken, session, url)
+        
     details = {}
     if root is not None:
         title_element = root.find('.//xip:Title', namespaces)
@@ -377,10 +384,12 @@ def get_generation_numbers(accesstoken: str, version: str, co_ref: str, session:
         
     return generations
 
-def get_formats(accesstoken: str, version: str, co_ref: str, generation: str, session: requests.Session, namespaces) -> str:
+def get_formats(accesstoken: str, version: str, co_ref: str, generation: str, session: requests.Session, namespaces, root=None) -> str:
     """Gets all CO formats."""
-    url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{generation}"
-    root = _get_entity_xml(accesstoken, session, url)
+    if root is None:
+        url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{generation}"
+        root = _get_entity_xml(accesstoken, session, url)
+        
     formats = []
     if root is not None:
         for elem in root.findall('.//xip:Formats/xip:Format/xip:PUID', namespaces):
@@ -452,41 +461,52 @@ def get_generation_details(accesstoken: str, version: str, io_ref: str, rep_type
 
     return co_refs
 
-def get_bitstream_details(accesstoken: str, version: str, co_ref: str, generation: str, session: requests.Session, namespaces) -> list:
-    """Gets all bitstream details for a specific generation of a CO."""
-    gen_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{generation}"
-    gen_root = _get_entity_xml(accesstoken, session, gen_url)
+def _fetch_bitstream_data(bitstream_url: str, accesstoken: str, session: requests.Session, namespaces: dict) -> dict:
+    """fetch and parse a single bitstream's XML."""
+    root = _get_entity_xml(accesstoken, session, bitstream_url)
+    if root is None:
+        return None
+        
+    details = {}
+    filename = root.find('.//xip:Filename', namespaces)
+    filesize = root.find('.//xip:FileSize', namespaces)
+    
+    details['filename'] = filename.text if filename is not None else None
+    details['filesize'] = int(filesize.text) if filesize is not None and filesize.text else None
+    details['bitstream_url'] = bitstream_url
+
+    fixity_data = {}
+    for fixity in root.findall('.//xip:Fixity', namespaces):
+        alg = fixity.find('xip:FixityAlgorithmRef', namespaces)
+        val = fixity.find('xip:FixityValue', namespaces)
+        if alg is not None and val is not None:
+            fixity_data[alg.text] = val.text
+    details['fixity'] = fixity_data
+    
+    return details
+
+def get_bitstream_details(accesstoken: str, version: str, co_ref: str, generation: str, session: requests.Session, namespaces, root=None) -> list:
+    """Gets all bitstream details for a specific generation of a CO concurrently."""
+    gen_root = root
+    if gen_root is None:
+        gen_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{generation}"
+        gen_root = _get_entity_xml(accesstoken, session, gen_url)
     
     all_bitstream_details = []
     
     if gen_root is not None:
         bitstream_elements = gen_root.findall('.//entity:Bitstream', namespaces)
+        urls_to_fetch = [elem.text for elem in bitstream_elements if elem is not None and elem.text]
         
-        for bitstream_element in bitstream_elements:
-            if bitstream_element is not None and bitstream_element.text:
-                bitstream_url = bitstream_element.text
-                
-                root = _get_entity_xml(accesstoken, session, bitstream_url)
-                if root is None:
-                    continue
-                    
-                details = {}
-                filename = root.find('.//xip:Filename', namespaces)
-                filesize = root.find('.//xip:FileSize', namespaces)
-                
-                details['filename'] = filename.text if filename is not None else None
-                details['filesize'] = int(filesize.text) if filesize is not None and filesize.text else None
-                details['bitstream_url'] = bitstream_url
-
-                fixity_data = {}
-                for fixity in root.findall('.//xip:Fixity', namespaces):
-                    alg = fixity.find('xip:FixityAlgorithmRef', namespaces)
-                    val = fixity.find('xip:FixityValue', namespaces)
-                    if alg is not None and val is not None:
-                        fixity_data[alg.text] = val.text
-                details['fixity'] = fixity_data
-                
-                all_bitstream_details.append(details)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(_fetch_bitstream_data, url, accesstoken, session, namespaces)
+                for url in urls_to_fetch
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    all_bitstream_details.append(result)
 
     if not all_bitstream_details:
         logger.warning(f"No bitstreams found for CO {co_ref}, Generation {generation}")
@@ -511,15 +531,19 @@ def find_all_children(accesstoken: str, version: str, parent_uuid: str, so_list:
 def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, session: requests.Session, namespaces) -> Tuple[Optional[str], Optional[pd.DataFrame]]:
     """Process a single package to return a df."""
 
-    pkg_title = get_pkg_title(accesstoken, start_uuid, version, session)
+    # Fetch top level XML once
+    top_url = f"https://nypl.preservica.com/api/entity/structural-objects/{start_uuid}"
+    top_root = _get_entity_xml(accesstoken, session, top_url)
+
+    pkg_title = get_pkg_title(accesstoken, start_uuid, version, session, root=top_root)
     if not pkg_title:
         logger.error(f"Could not retrieve pkg title for {start_uuid}, skipping.")
         return None, None
 
     logger.info(f"Processing pkg parts: {pkg_title} (uuid: {start_uuid})")
 
-    # columns for top level SO ref
-    top_level_so_mfrag = get_metadata_fragments(accesstoken, version, 'structural-objects', start_uuid, session, namespaces)
+
+    top_level_so_mfrag = get_metadata_fragments(accesstoken, version, 'structural-objects', start_uuid, session, namespaces, root=top_root)
     top_level_identifier = get_identifiers(accesstoken, version, 'structural-objects', start_uuid, session, namespaces)
 
     ingest_info = get_ingest_details(accesstoken, version, start_uuid, session, namespaces)
@@ -537,10 +561,13 @@ def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, 
     so_details_cache = {}
     for so_ref in all_so_refs:
         if so_ref not in so_details_cache:
+            so_url = f"https://nypl.preservica.com/api/entity/structural-objects/{so_ref}"
+            so_root = _get_entity_xml(accesstoken, session, so_url)
+
             so_details_cache[so_ref] = {
-                'title': get_pkg_title(accesstoken, so_ref, version, session),
-                'security_tag': get_security_tag(accesstoken, version, 'structural-objects', so_ref, session, namespaces),
-                'mfrags': get_metadata_fragments(accesstoken, version, 'structural-objects', so_ref, session, namespaces),
+                'title': get_pkg_title(accesstoken, so_ref, version, session, root=so_root),
+                'security_tag': get_security_tag(accesstoken, version, 'structural-objects', so_ref, session, namespaces, root=so_root),
+                'mfrags': get_metadata_fragments(accesstoken, version, 'structural-objects', so_ref, session, namespaces, root=so_root),
                 'ids': get_identifiers(accesstoken, version, 'structural-objects', so_ref, session, namespaces)
             }
 
@@ -554,9 +581,12 @@ def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, 
         parent_so_ref = io_info['parent_so_ref']
 
         if io_ref not in io_details_cache:
+            io_url = f"https://nypl.preservica.com/api/entity/information-objects/{io_ref}"
+            io_root = _get_entity_xml(accesstoken, session, io_url)
+
             io_details_cache[io_ref] = {
-                'security_tag': get_security_tag(accesstoken, version, 'information-objects', io_ref, session, namespaces),
-                'mfrags': get_metadata_fragments(accesstoken, version, 'information-objects', io_ref, session, namespaces),
+                'security_tag': get_security_tag(accesstoken, version, 'information-objects', io_ref, session, namespaces, root=io_root),
+                'mfrags': get_metadata_fragments(accesstoken, version, 'information-objects', io_ref, session, namespaces, root=io_root),
                 'ids': get_identifiers(accesstoken, version, 'information-objects', io_ref, session, namespaces)
             }
             
@@ -579,7 +609,11 @@ def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, 
             
             for co_ref in co_refs:
                 generations = get_generation_numbers(accesstoken, version, co_ref, session, namespaces)
-                co_details = get_co_details(accesstoken, version, co_ref, session, namespaces)
+                
+                co_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}"
+                co_root = _get_entity_xml(accesstoken, session, co_url)
+                
+                co_details = get_co_details(accesstoken, version, co_ref, session, namespaces, root=co_root)
                 co_id = get_identifiers(accesstoken, version, 'content-objects', co_ref, session, namespaces)
                 
                 if not generations:
@@ -587,10 +621,13 @@ def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, 
                     continue
                 
                 for generation in generations:
-                    bitstreams = get_bitstream_details(accesstoken, version, co_ref, generation, session, namespaces)
+                    gen_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{generation}"
+                    gen_root = _get_entity_xml(accesstoken, session, gen_url)
+                    
+                    bitstreams = get_bitstream_details(accesstoken, version, co_ref, generation, session, namespaces, root=gen_root)
                     
                     if bitstreams and co_details:
-                        formats = get_formats(accesstoken, version, co_ref, generation, session, namespaces)
+                        formats = get_formats(accesstoken, version, co_ref, generation, session, namespaces, root=gen_root)
                         
                         for bitstream in bitstreams:
                             path_key = (rep['type'], bitstream.get('filename'))
@@ -773,4 +810,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

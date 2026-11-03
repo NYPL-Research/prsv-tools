@@ -9,19 +9,27 @@ import prsv_tools.utility.creds as prsvcreds
 
 TOKEN_BASE_URL = "https://nypl.preservica.com/api/accesstoken/login"
 
+_VERSION_CACHE = {}
+_TOKEN_CACHE = {}
+
 
 def get_token(credential_set: str) -> str:
     """
     return token string
-    check for existing valid token in token file
+    check for existing valid token in in-memory cache, then token file
     if the file does not exist or the token is out of date, create token
     """
+    if credential_set in _TOKEN_CACHE:
+        time_issued, token = _TOKEN_CACHE[credential_set]
+        if time.time() - time_issued < 500:
+            return token
 
     token_file = Path(f"{credential_set}.token.file")
     if token_file.is_file():
         time_issued, sessiontoken = token_file.read_text().split("\n")
         # tokens are valid for 500 seconds
         if time.time() - float(time_issued) < 500:
+            _TOKEN_CACHE[credential_set] = (float(time_issued), sessiontoken)
             return sessiontoken
 
     return create_token(credential_set, token_file)
@@ -50,11 +58,16 @@ def create_token(credential_set: str, token_file: Path) -> str:
 
     # write token to token.file for later reuse
     token_file.write_text(f'{str(time.time())}\n{data["token"]}')
+    
+    _TOKEN_CACHE[credential_set] = (time.time(), data["token"])
 
     return data["token"]
 
 
 def find_apiversion(credential_set: str) -> str:
+    if credential_set in _VERSION_CACHE:
+        return _VERSION_CACHE[credential_set]
+
     schemas_url = "https://nypl.preservica.com/api/admin/schemas"
     token = get_token(credential_set)
     headers = {
@@ -66,7 +79,9 @@ def find_apiversion(credential_set: str) -> str:
 
     version_search = re.search(r"v(\d+\.\d+)\}", root.tag)
     if version_search:
-        return version_search.group(1)
+        version = version_search.group(1)
+        _VERSION_CACHE[credential_set] = version
+        return version
     else:
         return ""
 

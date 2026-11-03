@@ -22,17 +22,21 @@ def extant_file(p: str) -> Path:
     return path
 
 
-def calculate_md5(file_path: Path, block_size: int = 65536) -> str:
+def calculate_md5(file_path: Path) -> str:
     """Calculates the MD5 checksum of a file."""
-    md5 = hashlib.md5()
     try:
         with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(block_size), b''):
-                md5.update(chunk)
+            if sys.version_info >= (3, 11):
+                return hashlib.file_digest(f, "md5").hexdigest()
+            else:
+                md5 = hashlib.md5()
+                # 8MB chunk size for older python versions
+                for chunk in iter(lambda: f.read(8388608), b''):
+                    md5.update(chunk)
+                return md5.hexdigest()
     except (IOError, OSError) as e:
         logger.error(f"Could not read file {file_path} for hashing: {e}")
         return None
-    return md5.hexdigest()
 
 def find_files(pkg_path: Path, folders: list[str]) -> list[Path]:
     """Finds all files in the specified subfolders of the package data directory."""
