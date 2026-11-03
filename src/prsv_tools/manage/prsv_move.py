@@ -10,6 +10,13 @@ import datetime
 import prsv_tools.utility.api as prsvapi
 from prsv_tools.manage.create_pkg_report import search_preservica_api, requests_retry_session
 
+AMI_UUID = "183a74b5-7247-4fb2-8184-959366bc0cbc"
+AMI_TEST = "9a99c060-b6cf-4bb1-8385-27ff72c69c78"
+DIGARCH_UUID = "e80315bc-42f5-44da-807f-446f78621c08"
+DIGARCH_TEST = "87fc43cd-4de5-401d-ae98-6199b9dd1be4"
+DELETION_UUID= "836a114b-839a-4af8-a4e1-001f200d6d40"
+DELETION_TEST = "08927ed5-3f19-4314-8184-a3a028294093"
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -106,10 +113,10 @@ def process_move_list(credentials: str, pkg_list: list = None, new_parent_ref: s
 
     session = requests_retry_session()
 
-    ami_uuid = "183a74b5-7247-4fb2-8184-959366bc0cbc" if "test" not in credentials else ""
-    digarch_uuid = "e80315bc-42f5-44da-807f-446f78621c08" if "test" not in credentials else "c0b9b47a-5552-4277-874e-092b3cc53af6"
-    deletion_uuid = "836a114b-839a-4af8-a4e1-001f200d6d40" if "test" not in credentials else ""
-    
+    ami_uuid = AMI_UUID if "test" not in credentials else AMI_TEST
+    digarch_uuid = DIGARCH_UUID if "test" not in credentials else DIGARCH_TEST
+    deletion_uuid = DELETION_UUID if "test" not in credentials else DELETION_TEST
+
     search_locations = {
         "DigAMI": ami_uuid,
         "DigArch": digarch_uuid,
@@ -194,9 +201,9 @@ def main():
 )
     logger = logging.getLogger(__name__)
 
-    ami_uuid = "183a74b5-7247-4fb2-8184-959366bc0cbc" if "test" not in args.credentials else ""
-    digarch_uuid = "e80315bc-42f5-44da-807f-446f78621c08" if "test" not in args.credentials else ""
-    deletion_uuid = "836a114b-839a-4af8-a4e1-001f200d6d40" if "test" not in args.credentials else ""
+    ami_uuid = AMI_UUID if "test" not in args.credentials else AMI_TEST
+    digarch_uuid = DIGARCH_UUID if "test" not in args.credentials else DIGARCH_TEST
+    deletion_uuid = DELETION_UUID if "test" not in args.credentials else DELETION_TEST
 
     if "ami" in args.new_parent_ref:
         n_parent = ami_uuid

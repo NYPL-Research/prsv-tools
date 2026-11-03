@@ -84,7 +84,7 @@ def data_folder_has_valid_servicecopies_subfolder(package: Path) -> bool:
 def servicecopies_folder_has_media_files(package: Path) -> bool:
     """ServiceCopies folder must have media files"""
     servicecopies_path = package / "data" / "ServiceCopies"
-    if not servicecopies_path.exists():
+    if not servicecopies_path.is_dir():
         return False
     media_file_ls = [
         x for x in servicecopies_path.iterdir() if x.is_file() and x.suffix.lower() in [".mp4", ".m4a"]
@@ -92,8 +92,12 @@ def servicecopies_folder_has_media_files(package: Path) -> bool:
     if not media_file_ls:
         LOGGER.error(f"{package.name} ServiceCopies folder does not have media files")
         return False
-    else:
-        return True
+
+    if any("_em" in file.name for file in media_file_ls):
+        LOGGER.error(f"{package.name} has '_em' files in ServiceCopies folder.")
+        return False
+
+    return True
 
 def data_folder_has_valid_preservation_masters_folder(package: Path) -> bool:
     """Third level folders must include a PreservationMasters folder"""
