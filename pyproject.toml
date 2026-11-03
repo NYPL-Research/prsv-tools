@@ -45,6 +45,7 @@ creds = 'prsv_tools.utility.api:main'
 retry_workflows = 'prsv_tools.ingest.retry_workflows:main'
 move_ami_linted_issues = 'prsv_tools.ingest.move_ami_linted_issues:main'
 validate_ami_ingests = 'prsv_tools.ingest.validate_ami_ingests:main'
+validate_bdami_ingests = 'prsv_tools.ingest.validate_bdami_ingests:main'
 export_workflows = 'prsv_tools.manage.export_workflows:main'
 export_metadata_only = 'prsv_tools.manage.export_metadata_only:main'
 create_pkg_report = 'prsv_tools.manage.create_pkg_report:main'
@@ -52,6 +53,8 @@ prsv_move = 'prsv_tools.manage.prsv_move:main'
 locate_metadata_jpegs = 'prsv_tools.manage.locate_metadata_jpegs:main'
 download_bitstream_content = 'prsv_tools.manage.download_bitstream_content:main'
 move_er_linted_issues = 'prsv_tools.ingest.move_er_linted_issues:main'
+update_storage = 'prsv_tools.manage.update_storage:main'
+lint_bdami = 'prsv_tools.ingest.lint_bdami:main'
 
 
 [tool.mypy]
